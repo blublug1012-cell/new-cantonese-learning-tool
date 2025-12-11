@@ -2,8 +2,8 @@ streamlit
 openai-whisper
 deep-translator
 ToJyutping
-moviepy==1.0.3
-Pillow==9.5.0
-numpy<1.25.0
+moviepy
+Pillow
+numpy
 pandas
 requests
