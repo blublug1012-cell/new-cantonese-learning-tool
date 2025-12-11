@@ -13,23 +13,42 @@ from deep_translator import GoogleTranslator
 from moviepy import VideoFileClip, CompositeVideoClip, ColorClip, VideoClip
 from PIL import Image, ImageDraw, ImageFont
 
-# --- 字体下载 ---
+# --- 🛠️ V6.1 修复：更健壮的字体加载函数 ---
 @st.cache_resource
 def load_fonts():
-    font_path = "NotoSansCJKtc-Regular.otf"
+    font_filename = "NotoSansCJKtc-Regular.otf"
+    font_path = os.path.join(os.getcwd(), font_filename)
+    font_url = "httpsgithub.com/googlefonts/noto-cjk/raw/main/Sans/OTF/TraditionalChinese/NotoSansCJKtc-Regular.otf"
+
+    # 检查逻辑：如果不存，或者文件太小(说明下载失败或损坏)，则重新下载
+    needs_download = False
     if not os.path.exists(font_path):
-        url = "https://github.com/googlefonts/noto-cjk/raw/main/Sans/OTF/TraditionalChinese/NotoSansCJKtc-Regular.otf"
-        with st.spinner("正在下载中文字体支持..."):
+        needs_download = True
+    elif os.path.getsize(font_path) < 1024 * 100: # 如果小于 100KB，肯定是个坏文件
+        st.warning("检测到字体文件损坏，正在重新下载...")
+        os.remove(font_path)
+        needs_download = True
+
+    if needs_download:
+        with st.spinner("正在下载中文字体支持 (约 16MB，请耐心等待)..."):
             try:
-                r = requests.get(url, timeout=60)
+                # 增加超时设置，防止卡死
+                r = requests.get(font_url, timeout=120)
+                r.raise_for_status() # 如果状态码不是200就报错
                 with open(font_path, "wb") as f:
                     f.write(r.content)
-            except:
-                st.error("字体下载失败，请检查网络连接。")
+                st.success("字体下载成功！")
+            except Exception as e:
+                st.error(f"字体下载失败: {e}")
+                # 确保没有留下损坏的文件
+                if os.path.exists(font_path):
+                    os.remove(font_path)
+                return None # 返回 None 表示失败
+
     return font_path
 
 st.set_page_config(page_title="粤语视频工坊 Pro", layout="wide", page_icon="🎬")
-st.title("🎬 粤语视频工坊 Pro (V6.0 存盘修复版)")
+st.title("🎬 粤语视频工坊 Pro (V6.1 字体修复版)")
 
 # --- 辅助函数 ---
 @st.cache_resource
@@ -152,12 +171,10 @@ if st.session_state.subtitles_df is not None:
     with col_tip:
         st.info("💡 修改下方表格内容后，点击「保存修改」或直接生成视频，都会应用您的修改。")
 
-    # 这里的 edited_df 实时获取用户在网页上的最新修改
     edited_df = st.data_editor(st.session_state.subtitles_df, num_rows="dynamic", use_container_width=True, key="editor")
 
     with col_btn:
         st.write("")
-        # 功能1：刷新翻译
         if st.button("✨ 刷新翻译与粤拼"):
             with st.spinner("正在重新生成..."):
                 updated_data = []
@@ -176,7 +193,6 @@ if st.session_state.subtitles_df is not None:
                 st.success("已更新！")
                 st.rerun()
 
-    # 功能2：手动保存 (用户想要的功能)
     if st.button("💾 保存当前修改 (Update State)"):
         st.session_state.subtitles_df = edited_df
         st.success("✅ 修改已保存到系统！")
@@ -186,68 +202,72 @@ if st.session_state.subtitles_df is not None:
     
     if st.button("🎬 生成视频"):
         font_path = load_fonts()
-        v_path = st.session_state.video_path
         
-        # 🔥 关键修复：直接使用 edited_df (用户屏幕上看到的最新数据)
-        # 如果用户还没点保存，直接用 edited_df 也能保证视频是新的
-        if edited_df is not None:
-            subs = edited_df.to_dict('records')
+        if font_path is None:
+             st.error("❌ 无法生成视频：中文字体下载失败。请尝试刷新页面重试。")
         else:
-            subs = st.session_state.subtitles_df.to_dict('records')
-        
-        progress = st.progress(0)
-        status = st.empty()
-        
-        try:
-            status.text("正在初始化...")
-            W, H = 720, 960
-            padding = 50
-            max_text_width = W - (padding * 2)
+            v_path = st.session_state.video_path
+            if edited_df is not None:
+                subs = edited_df.to_dict('records')
+            else:
+                subs = st.session_state.subtitles_df.to_dict('records')
             
-            clip = VideoFileClip(v_path)
-            try: clip = clip.resized(width=W)
-            except AttributeError: clip = clip.resize(width=W)
+            progress = st.progress(0)
+            status = st.empty()
             
-            target_h = 500
-            if clip.h > target_h:
-                clip = clip.crop(y1=(clip.h - target_h)/2, height=target_h)
-            
-            def make_frame(t):
-                img = Image.new('RGBA', (W, H), (0, 0, 0, 0))
-                draw = ImageDraw.Draw(img)
-                cur = next((s for s in subs if s['start'] <= t <= s['end']), None)
-                nxt = next((s for s in subs if s['start'] > t), None)
-                try:
+            try:
+                status.text("正在初始化...")
+                W, H = 720, 960
+                padding = 50
+                max_text_width = W - (padding * 2)
+                
+                clip = VideoFileClip(v_path)
+                try: clip = clip.resized(width=W)
+                except AttributeError: clip = clip.resize(width=W)
+                
+                target_h = 500
+                if clip.h > target_h:
+                    clip = clip.crop(y1=(clip.h - target_h)/2, height=target_h)
+                
+                def make_frame(t):
+                    img = Image.new('RGBA', (W, H), (0, 0, 0, 0))
+                    draw = ImageDraw.Draw(img)
+                    cur = next((s for s in subs if s['start'] <= t <= s['end']), None)
+                    nxt = next((s for s in subs if s['start'] > t), None)
+                    
+                    # 🛠️ 关键修改：在这里尝试加载字体，如果失败，会抛出异常被 try 捕获
+                    # 而不是默默地使用默认字体
                     f_cn = ImageFont.truetype(font_path, 52)
                     f_jp = ImageFont.truetype(font_path, 28)
                     f_en = ImageFont.truetype(font_path, 24)
-                except:
-                    f_cn = ImageFont.load_default(); f_jp = ImageFont.load_default(); f_en = ImageFont.load_default()
-                
-                cursor_y = target_h + 40
-                if cur:
-                    cursor_y = draw_text_wrapper(draw, cur['text'], f_cn, max_text_width, cursor_y, "#FFD700", 12)
-                    cursor_y += 12 
-                    cursor_y = draw_text_wrapper(draw, cur['jyutping'], f_jp, max_text_width, cursor_y, "#87CEEB", 8)
-                    cursor_y += 12
-                    cursor_y = draw_text_wrapper(draw, str(cur['english']), f_en, max_text_width, cursor_y, "#FFFFFF", 8)
-                if nxt:
-                    draw.text((50, 900), f"Next: {nxt['text']}", font=f_jp, fill="#555555")
-                return np.array(img)
+                    
+                    cursor_y = target_h + 40
+                    if cur:
+                        cursor_y = draw_text_wrapper(draw, cur['text'], f_cn, max_text_width, cursor_y, "#FFD700", 12)
+                        cursor_y += 12 
+                        cursor_y = draw_text_wrapper(draw, cur['jyutping'], f_jp, max_text_width, cursor_y, "#87CEEB", 8)
+                        cursor_y += 12
+                        cursor_y = draw_text_wrapper(draw, str(cur['english']), f_en, max_text_width, cursor_y, "#FFFFFF", 8)
+                    if nxt:
+                        draw.text((50, 900), f"Next: {nxt['text']}", font=f_jp, fill="#555555")
+                    return np.array(img)
 
-            status.text("正在渲染 (约3分钟)...")
-            sub_clip = VideoClip(make_frame, duration=clip.duration)
-            bg_clip = ColorClip(size=(W, H), color=(20, 20, 20), duration=clip.duration)
-            final = CompositeVideoClip([bg_clip, clip.with_position(('center', 'top')), sub_clip.with_position('center')])
-            
-            out_file = "cantonese_final_v6.mp4"
-            final.write_videofile(out_file, fps=24, codec='libx264', audio_codec='aac', logger=None)
-            
-            status.success("完成！")
-            progress.progress(100)
-            with open(out_file, "rb") as f:
-                st.download_button("⬇️ 下载视频", f, file_name="cantonese_tutor_saved.mp4")
-            st.video(out_file)
-            
-        except Exception as e:
-            st.error(f"合成出错: {e}")
+                status.text("正在渲染 (约3分钟)...")
+                sub_clip = VideoClip(make_frame, duration=clip.duration)
+                bg_clip = ColorClip(size=(W, H), color=(20, 20, 20), duration=clip.duration)
+                final = CompositeVideoClip([bg_clip, clip.with_position(('center', 'top')), sub_clip.with_position('center')])
+                
+                out_file = "cantonese_final_v6.mp4"
+                final.write_videofile(out_file, fps=24, codec='libx264', audio_codec='aac', logger=None)
+                
+                status.success("完成！")
+                progress.progress(100)
+                with open(out_file, "rb") as f:
+                    st.download_button("⬇️ 下载视频", f, file_name="cantonese_tutor_saved.mp4")
+                st.video(out_file)
+                
+            except Exception as e:
+                st.error(f"合成出错 (通常是字体问题): {e}")
+                # 如果出错，尝试删除字体文件，迫使下次重新下载
+                if os.path.exists(font_path):
+                    os.remove(font_path)
