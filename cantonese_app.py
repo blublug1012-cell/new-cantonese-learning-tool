@@ -6,10 +6,10 @@ import requests
 import pandas as pd
 import numpy as np
 import time
-import re # 👈 新增：用于正则表达式检查
+import re
 from deep_translator import GoogleTranslator
 
-# --- MoviePy 2.0+ 导入方式 ---
+# --- MoviePy 2.0+ 导入 ---
 from moviepy import VideoFileClip, CompositeVideoClip, ColorClip, VideoClip
 from PIL import Image, ImageDraw, ImageFont
 
@@ -29,7 +29,7 @@ def load_fonts():
     return font_path
 
 st.set_page_config(page_title="粤语视频工坊 Pro", layout="wide", page_icon="🎬")
-st.title("🎬 粤语视频工坊 Pro (V5.1 翻译修复版)")
+st.title("🎬 粤语视频工坊 Pro (V6.0 存盘修复版)")
 
 # --- 辅助函数 ---
 @st.cache_resource
@@ -40,42 +40,28 @@ def get_jyutping_list(text):
     from ToJyutping import get_jyutping_list
     return get_jyutping_list(text)
 
-# --- 🛡️ 新增：检查文本是否包含中文 ---
 def contains_chinese(text):
-    # 使用正则表达式检查是否包含中文字符范围
     return bool(re.search(r'[\u4e00-\u9fff]', str(text)))
 
-# --- 🧠 增强型翻译：更严格的检查 ---
 def context_aware_translate(current_text, prev_text=""):
-    if not current_text or not current_text.strip():
-        return ""
-        
+    if not current_text or not current_text.strip(): return ""
     try:
-        time.sleep(0.3) # 稍微增加延时
+        time.sleep(0.3)
         translator = GoogleTranslator(source='zh-TW', target='en')
-        
         res = translator.translate(current_text)
-        
-        # 严格检查三连：
-        # 1. 结果不为空
-        # 2. 结果不等于原文
-        # 3. 结果里不包含任何中文字符！(核心修复)
         if res and res != current_text and not contains_chinese(res):
             return res
-        else:
-            # 如果翻译结果里还有中文，判定为失败
-            return "[翻译失败，请手动修改]"
+        return "[翻译失败，请手动修改]"
     except:
         pass
     return "[网络错误]"
 
-# --- 🧩 核心：全能换行绘制函数 ---
 def draw_text_wrapper(draw, text, font, max_width, start_y, color, line_spacing=10):
     if not text: return start_y
     lines = []
     
-    # 判断逻辑：如果包含空格，按单词换行 (English/Jyutping)
-    if ' ' in text and not contains_chinese(text): # 额外检查，确保不是带空格的中文
+    # 英文/粤拼 (按空格换行)
+    if ' ' in text and not contains_chinese(text):
         words = text.split(' ')
         current_line = []
         for word in words:
@@ -86,43 +72,29 @@ def draw_text_wrapper(draw, text, font, max_width, start_y, color, line_spacing=
             if w <= max_width:
                 current_line.append(word)
             else:
-                if current_line:
-                    lines.append(' '.join(current_line))
-                    current_line = [word]
-                else:
-                    lines.append(word)
-                    current_line = []
-        if current_line:
-            lines.append(' '.join(current_line))
-            
+                if current_line: lines.append(' '.join(current_line)); current_line = [word]
+                else: lines.append(word); current_line = []
+        if current_line: lines.append(' '.join(current_line))
     else:
-        # 🇨🇳 中文模式 (或无空格的长字符串)：按字符强制换行
+        # 中文 (按字换行)
         current_line = ""
         for char in text:
             test_line = current_line + char
             try: w = draw.textlength(test_line, font=font)
             except AttributeError: w = draw.textsize(test_line, font=font)[0]
-            
-            if w <= max_width:
-                current_line += char
-            else:
-                lines.append(current_line)
-                current_line = char
-        if current_line:
-            lines.append(current_line)
+            if w <= max_width: current_line += char
+            else: lines.append(current_line); current_line = char
+        if current_line: lines.append(current_line)
 
-    # 绘制每一行
     current_y = start_y
     for line in lines:
         try: w = draw.textlength(line, font=font); h = font.size
         except AttributeError: w, h = draw.textsize(line, font=font)
-        
         draw.text(((720 - w) / 2, current_y), line, font=font, fill=color)
         current_y += h + line_spacing
-        
     return current_y
 
-# --- 主程序逻辑 ---
+# --- 主程序 ---
 if 'subtitles_df' not in st.session_state:
     st.session_state.subtitles_df = None
 if 'video_path' not in st.session_state:
@@ -153,16 +125,12 @@ with st.sidebar:
                 st.write("📝 生成初稿...")
                 data = []
                 prev_text = ""
-                
                 for seg in result['segments']:
                     txt = seg['text']
                     jp_list = get_jyutping_list(txt)
                     jp_str = " ".join([i[1] if i[1] else i[0] for i in jp_list])
-                    
-                    # 使用更严格的翻译函数
                     eng = context_aware_translate(txt, prev_text)
                     prev_text = txt
-                    
                     data.append({
                         "start": round(seg['start'], 2),
                         "end": round(seg['end'], 2),
@@ -173,44 +141,45 @@ with st.sidebar:
                 
                 st.session_state.subtitles_df = pd.DataFrame(data)
                 if os.path.exists(audio_path): os.remove(audio_path)
-                status.update(label="✅ 初稿完成！", state="complete", expanded=False)
+                status.update(label="✅ 完成！", state="complete", expanded=False)
 
-# --- 校对与导出 ---
+# --- 编辑区域 ---
 if st.session_state.subtitles_df is not None:
     st.divider()
     st.header("2. 智能校对")
     
     col_tip, col_btn = st.columns([3, 1])
     with col_tip:
-        st.info("💡 如果看到「[翻译失败...]」，请手动修改该行的英文翻译，或者尝试修改中文后点击刷新按钮。")
-    
+        st.info("💡 修改下方表格内容后，点击「保存修改」或直接生成视频，都会应用您的修改。")
+
+    # 这里的 edited_df 实时获取用户在网页上的最新修改
     edited_df = st.data_editor(st.session_state.subtitles_df, num_rows="dynamic", use_container_width=True, key="editor")
 
     with col_btn:
         st.write("")
-        if st.button("✨ 刷新翻译与粤拼", type="primary"):
-            with st.spinner("正在严格重新生成..."):
+        # 功能1：刷新翻译
+        if st.button("✨ 刷新翻译与粤拼"):
+            with st.spinner("正在重新生成..."):
                 updated_data = []
                 prev_text = ""
                 for index, row in edited_df.iterrows():
                     new_text = row['text']
                     jp_list = get_jyutping_list(new_text)
                     new_jp = " ".join([i[1] if i[1] else i[0] for i in jp_list])
-                    
-                    # 刷新时也使用严格检查
                     new_eng = context_aware_translate(new_text, prev_text)
                     prev_text = new_text
-                    
                     updated_data.append({
-                        "start": row['start'],
-                        "end": row['end'],
-                        "text": new_text,
-                        "jyutping": new_jp,
-                        "english": new_eng
+                        "start": row['start'], "end": row['end'],
+                        "text": new_text, "jyutping": new_jp, "english": new_eng
                     })
                 st.session_state.subtitles_df = pd.DataFrame(updated_data)
-                st.success("✅ 更新完成！")
+                st.success("已更新！")
                 st.rerun()
+
+    # 功能2：手动保存 (用户想要的功能)
+    if st.button("💾 保存当前修改 (Update State)"):
+        st.session_state.subtitles_df = edited_df
+        st.success("✅ 修改已保存到系统！")
 
     st.divider()
     st.header("3. 视频合成")
@@ -218,7 +187,13 @@ if st.session_state.subtitles_df is not None:
     if st.button("🎬 生成视频"):
         font_path = load_fonts()
         v_path = st.session_state.video_path
-        subs = st.session_state.subtitles_df.to_dict('records')
+        
+        # 🔥 关键修复：直接使用 edited_df (用户屏幕上看到的最新数据)
+        # 如果用户还没点保存，直接用 edited_df 也能保证视频是新的
+        if edited_df is not None:
+            subs = edited_df.to_dict('records')
+        else:
+            subs = st.session_state.subtitles_df.to_dict('records')
         
         progress = st.progress(0)
         status = st.empty()
@@ -255,9 +230,7 @@ if st.session_state.subtitles_df is not None:
                     cursor_y += 12 
                     cursor_y = draw_text_wrapper(draw, cur['jyutping'], f_jp, max_text_width, cursor_y, "#87CEEB", 8)
                     cursor_y += 12
-                    # 英文这里也用 wrapper，确保万一有超长单词也能处理
                     cursor_y = draw_text_wrapper(draw, str(cur['english']), f_en, max_text_width, cursor_y, "#FFFFFF", 8)
-                
                 if nxt:
                     draw.text((50, 900), f"Next: {nxt['text']}", font=f_jp, fill="#555555")
                 return np.array(img)
@@ -267,13 +240,13 @@ if st.session_state.subtitles_df is not None:
             bg_clip = ColorClip(size=(W, H), color=(20, 20, 20), duration=clip.duration)
             final = CompositeVideoClip([bg_clip, clip.with_position(('center', 'top')), sub_clip.with_position('center')])
             
-            out_file = "cantonese_final_v5_1.mp4"
+            out_file = "cantonese_final_v6.mp4"
             final.write_videofile(out_file, fps=24, codec='libx264', audio_codec='aac', logger=None)
             
             status.success("完成！")
             progress.progress(100)
             with open(out_file, "rb") as f:
-                st.download_button("⬇️ 下载视频", f, file_name="cantonese_tutor_perfect.mp4")
+                st.download_button("⬇️ 下载视频", f, file_name="cantonese_tutor_saved.mp4")
             st.video(out_file)
             
         except Exception as e:
