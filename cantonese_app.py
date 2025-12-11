@@ -8,10 +8,8 @@ import numpy as np
 import time
 from deep_translator import GoogleTranslator
 
-# --- 核心修改：适配 MoviePy 2.0+ 的新写法 ---
-# 1. 不再从 moviepy.editor 导入，而是直接从 moviepy 导入
+# --- MoviePy 2.0+ 导入方式 ---
 from moviepy import VideoFileClip, CompositeVideoClip, ColorClip, VideoClip
-# 2. 导入 PIL 库
 from PIL import Image, ImageDraw, ImageFont
 
 # --- 字体下载 ---
@@ -30,7 +28,7 @@ def load_fonts():
     return font_path
 
 st.set_page_config(page_title="粤语视频工坊 Pro", layout="wide", page_icon="🎬")
-st.title("🎬 粤语视频工坊 Pro (2025 新版适配)")
+st.title("🎬 粤语视频工坊 Pro (最终完美版)")
 
 # --- 辅助函数 ---
 @st.cache_resource
@@ -38,7 +36,6 @@ def load_model():
     return whisper.load_model("base")
 
 def get_jyutping_list(text):
-    # 延迟导入，防止库冲突
     from ToJyutping import get_jyutping_list
     return get_jyutping_list(text)
 
@@ -74,15 +71,13 @@ with st.sidebar:
             
             with st.status("AI 正在流水线工作中...", expanded=True) as status:
                 st.write("📂 提取音频...")
-                # MoviePy 2.0 写法: 直接调用，大部分兼容
                 video = VideoFileClip(st.session_state.video_path)
                 audio_path = "temp_audio.wav"
                 
-                # 兼容性处理：不同版本 write_audiofile 参数略有不同，但通常兼容
+                # 兼容性处理
                 try:
                     video.audio.write_audiofile(audio_path, verbose=False, logger=None)
                 except:
-                    # 如果参数报错，尝试最简调用
                     video.audio.write_audiofile(audio_path)
                 
                 st.write("🧠 识别粤语...")
@@ -136,18 +131,14 @@ if st.session_state.subtitles_df is not None:
             status.text("正在初始化...")
             W, H = 720, 960
             
-            # --- 核心修改：MoviePy 2.0 的 resize 写法 ---
             clip = VideoFileClip(v_path)
             
-            # 尝试使用新版 API resized()，如果失败回退到 resize()
+            # --- 兼容性修改：resize ---
             try:
-                # MoviePy 2.0+ 推荐写法
-                clip = clip.resized(width=W)
+                clip = clip.resized(width=W) # v2.0 新写法
             except AttributeError:
-                # 旧版或过渡版写法
-                clip = clip.resize(width=W)
+                clip = clip.resize(width=W)  # 旧写法
             
-            # 裁剪高度
             target_h = 500
             if clip.h > target_h:
                 clip = clip.crop(y1=(clip.h - target_h)/2, height=target_h)
@@ -171,13 +162,19 @@ if st.session_state.subtitles_df is not None:
                 y_start = target_h + 40
                 
                 if cur:
-                    w1 = draw.textlength(cur['text'], font=f_cn)
+                    # 获取文字宽度 (Pillow 10.0+ 使用 textlength)
+                    try:
+                        w1 = draw.textlength(cur['text'], font=f_cn)
+                        w2 = draw.textlength(cur['jyutping'], font=f_jp)
+                        w3 = draw.textlength(str(cur['english']), font=f_en)
+                    except AttributeError:
+                        # 旧版 Pillow 兼容
+                        w1 = draw.textsize(cur['text'], font=f_cn)[0]
+                        w2 = draw.textsize(cur['jyutping'], font=f_jp)[0]
+                        w3 = draw.textsize(str(cur['english']), font=f_en)[0]
+
                     draw.text(((W-w1)/2, y_start), cur['text'], font=f_cn, fill="#FFD700")
-                    
-                    w2 = draw.textlength(cur['jyutping'], font=f_jp)
                     draw.text(((W-w2)/2, y_start + 80), cur['jyutping'], font=f_jp, fill="#87CEEB")
-                    
-                    w3 = draw.textlength(str(cur['english']), font=f_en)
                     draw.text(((W-w3)/2, y_start + 130), str(cur['english']), font=f_en, fill="#FFFFFF")
 
                 if nxt:
@@ -188,13 +185,13 @@ if st.session_state.subtitles_df is not None:
             status.text("正在渲染 (约3分钟)...")
             sub_clip = VideoClip(make_frame, duration=clip.duration)
             
-            # MoviePy 2.0 的 ColorClip 可能需要 color 作为元组
             bg_clip = ColorClip(size=(W, H), color=(20, 20, 20), duration=clip.duration)
             
+            # --- 关键修改：set_position -> with_position ---
             final = CompositeVideoClip([
                 bg_clip,
-                clip.set_position(('center', 'top')),
-                sub_clip.set_position('center')
+                clip.with_position(('center', 'top')),  # 修复这里
+                sub_clip.with_position('center')        # 修复这里
             ])
             
             out_file = "cantonese_final.mp4"
@@ -210,6 +207,5 @@ if st.session_state.subtitles_df is not None:
             
         except Exception as e:
             st.error(f"合成出错: {e}")
-            # 打印详细错误，方便排查
             import traceback
             st.text(traceback.format_exc())
