@@ -6,6 +6,7 @@ import requests
 import pandas as pd
 import numpy as np
 import time
+import re # 👈 新增：用于正则表达式检查
 from deep_translator import GoogleTranslator
 
 # --- MoviePy 2.0+ 导入方式 ---
@@ -28,7 +29,7 @@ def load_fonts():
     return font_path
 
 st.set_page_config(page_title="粤语视频工坊 Pro", layout="wide", page_icon="🎬")
-st.title("🎬 粤语视频工坊 Pro (V5 完美排版版)")
+st.title("🎬 粤语视频工坊 Pro (V5.1 翻译修复版)")
 
 # --- 辅助函数 ---
 @st.cache_resource
@@ -39,32 +40,42 @@ def get_jyutping_list(text):
     from ToJyutping import get_jyutping_list
     return get_jyutping_list(text)
 
-# --- 🧠 增强型翻译：尝试结合上下文 ---
+# --- 🛡️ 新增：检查文本是否包含中文 ---
+def contains_chinese(text):
+    # 使用正则表达式检查是否包含中文字符范围
+    return bool(re.search(r'[\u4e00-\u9fff]', str(text)))
+
+# --- 🧠 增强型翻译：更严格的检查 ---
 def context_aware_translate(current_text, prev_text=""):
+    if not current_text or not current_text.strip():
+        return ""
+        
     try:
-        time.sleep(0.2)
+        time.sleep(0.3) # 稍微增加延时
         translator = GoogleTranslator(source='zh-TW', target='en')
         
-        # 策略：如果是非常短的句子，可能需要结合上一句才有意义
-        # 但为了避免翻译混乱，我们主要还是翻译当前句。
-        # 这里使用一个技巧：如果上一句存在，我们在 prompt 里暗示一下，但 Google Translate API 不支持 prompt。
-        # 替代方案：依靠人工校对（V4已实现）。
-        # 这里我们做基础翻译，但增加重试和清洗。
-        
         res = translator.translate(current_text)
-        if res and res != current_text:
+        
+        # 严格检查三连：
+        # 1. 结果不为空
+        # 2. 结果不等于原文
+        # 3. 结果里不包含任何中文字符！(核心修复)
+        if res and res != current_text and not contains_chinese(res):
             return res
+        else:
+            # 如果翻译结果里还有中文，判定为失败
+            return "[翻译失败，请手动修改]"
     except:
         pass
-    return "[Translation Error]"
+    return "[网络错误]"
 
-# --- 🧩 核心：全能换行绘制函数 (支持中文和英文) ---
+# --- 🧩 核心：全能换行绘制函数 ---
 def draw_text_wrapper(draw, text, font, max_width, start_y, color, line_spacing=10):
     if not text: return start_y
     lines = []
     
     # 判断逻辑：如果包含空格，按单词换行 (English/Jyutping)
-    if ' ' in text:
+    if ' ' in text and not contains_chinese(text): # 额外检查，确保不是带空格的中文
         words = text.split(' ')
         current_line = []
         for word in words:
@@ -85,7 +96,7 @@ def draw_text_wrapper(draw, text, font, max_width, start_y, color, line_spacing=
             lines.append(' '.join(current_line))
             
     else:
-        # 🇨🇳 中文模式：按字符强制换行
+        # 🇨🇳 中文模式 (或无空格的长字符串)：按字符强制换行
         current_line = ""
         for char in text:
             test_line = current_line + char
@@ -95,7 +106,6 @@ def draw_text_wrapper(draw, text, font, max_width, start_y, color, line_spacing=
             if w <= max_width:
                 current_line += char
             else:
-                # 这一行满了，存下来，开新行
                 lines.append(current_line)
                 current_line = char
         if current_line:
@@ -107,7 +117,6 @@ def draw_text_wrapper(draw, text, font, max_width, start_y, color, line_spacing=
         try: w = draw.textlength(line, font=font); h = font.size
         except AttributeError: w, h = draw.textsize(line, font=font)
         
-        # 居中绘制
         draw.text(((720 - w) / 2, current_y), line, font=font, fill=color)
         current_y += h + line_spacing
         
@@ -143,18 +152,16 @@ with st.sidebar:
                 
                 st.write("📝 生成初稿...")
                 data = []
-                prev_text = "" # 记录上一句
+                prev_text = ""
                 
                 for seg in result['segments']:
                     txt = seg['text']
-                    
-                    # 1. 粤拼
                     jp_list = get_jyutping_list(txt)
                     jp_str = " ".join([i[1] if i[1] else i[0] for i in jp_list])
                     
-                    # 2. 翻译
+                    # 使用更严格的翻译函数
                     eng = context_aware_translate(txt, prev_text)
-                    prev_text = txt # 更新上一句
+                    prev_text = txt
                     
                     data.append({
                         "start": round(seg['start'], 2),
@@ -175,14 +182,14 @@ if st.session_state.subtitles_df is not None:
     
     col_tip, col_btn = st.columns([3, 1])
     with col_tip:
-        st.info("💡 翻译技巧：由于免费版 AI 缺乏上下文记忆，如果翻译不准，请手动修改「粤语汉字」把主语补全（例如加个‘我’），然后点击刷新，翻译会准确很多！")
+        st.info("💡 如果看到「[翻译失败...]」，请手动修改该行的英文翻译，或者尝试修改中文后点击刷新按钮。")
     
     edited_df = st.data_editor(st.session_state.subtitles_df, num_rows="dynamic", use_container_width=True, key="editor")
 
     with col_btn:
         st.write("")
         if st.button("✨ 刷新翻译与粤拼", type="primary"):
-            with st.spinner("正在重新生成..."):
+            with st.spinner("正在严格重新生成..."):
                 updated_data = []
                 prev_text = ""
                 for index, row in edited_df.iterrows():
@@ -190,7 +197,7 @@ if st.session_state.subtitles_df is not None:
                     jp_list = get_jyutping_list(new_text)
                     new_jp = " ".join([i[1] if i[1] else i[0] for i in jp_list])
                     
-                    # 刷新时也尝试带入简单的上下文逻辑
+                    # 刷新时也使用严格检查
                     new_eng = context_aware_translate(new_text, prev_text)
                     prev_text = new_text
                     
@@ -219,7 +226,7 @@ if st.session_state.subtitles_df is not None:
         try:
             status.text("正在初始化...")
             W, H = 720, 960
-            padding = 50 # 边距
+            padding = 50
             max_text_width = W - (padding * 2)
             
             clip = VideoFileClip(v_path)
@@ -236,28 +243,22 @@ if st.session_state.subtitles_df is not None:
                 cur = next((s for s in subs if s['start'] <= t <= s['end']), None)
                 nxt = next((s for s in subs if s['start'] > t), None)
                 try:
-                    # 字体大小设置
-                    f_cn = ImageFont.truetype(font_path, 52) # 汉字
-                    f_jp = ImageFont.truetype(font_path, 28) # 粤拼
-                    f_en = ImageFont.truetype(font_path, 24) # 英文
+                    f_cn = ImageFont.truetype(font_path, 52)
+                    f_jp = ImageFont.truetype(font_path, 28)
+                    f_en = ImageFont.truetype(font_path, 24)
                 except:
                     f_cn = ImageFont.load_default(); f_jp = ImageFont.load_default(); f_en = ImageFont.load_default()
                 
-                cursor_y = target_h + 40 # 字幕起始位置
+                cursor_y = target_h + 40
                 if cur:
-                    # 1. 汉字 (智能换行)
                     cursor_y = draw_text_wrapper(draw, cur['text'], f_cn, max_text_width, cursor_y, "#FFD700", 12)
-                    cursor_y += 12 # 块间距
-                    
-                    # 2. 粤拼 (智能换行)
+                    cursor_y += 12 
                     cursor_y = draw_text_wrapper(draw, cur['jyutping'], f_jp, max_text_width, cursor_y, "#87CEEB", 8)
                     cursor_y += 12
-                    
-                    # 3. 英文 (智能换行)
+                    # 英文这里也用 wrapper，确保万一有超长单词也能处理
                     cursor_y = draw_text_wrapper(draw, str(cur['english']), f_en, max_text_width, cursor_y, "#FFFFFF", 8)
                 
                 if nxt:
-                    # 预览下一句
                     draw.text((50, 900), f"Next: {nxt['text']}", font=f_jp, fill="#555555")
                 return np.array(img)
 
@@ -266,7 +267,7 @@ if st.session_state.subtitles_df is not None:
             bg_clip = ColorClip(size=(W, H), color=(20, 20, 20), duration=clip.duration)
             final = CompositeVideoClip([bg_clip, clip.with_position(('center', 'top')), sub_clip.with_position('center')])
             
-            out_file = "cantonese_final_v5.mp4"
+            out_file = "cantonese_final_v5_1.mp4"
             final.write_videofile(out_file, fps=24, codec='libx264', audio_codec='aac', logger=None)
             
             status.success("完成！")
